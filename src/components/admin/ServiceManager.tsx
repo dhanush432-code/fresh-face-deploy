@@ -362,13 +362,13 @@ export default function ServiceManager() {
                       </div>
                       <div className="ml-3 flex-shrink-0 text-right">
                         <div className="text-xl font-bold text-green-600">
-                          ₹{service.price.toFixed(2)}
+                          ₹{service.price?.toFixed(2) ?? '0.00'}
                         </div>
                         {service.membershipRate && (
                           <div className="mt-1 flex items-center justify-end gap-1">
                             <SparklesIcon className="h-3 w-3 text-amber-600" />
                             <span className="text-xs font-medium text-amber-700">
-                              ₹{service.membershipRate.toFixed(2)}
+                              ₹{service.membershipRate.toFixed(2) ?? '0.00'}
                             </span>
                           </div>
                         )}

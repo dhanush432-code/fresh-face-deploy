@@ -1,8 +1,17 @@
 // app/api/users/billing-staff/route.ts
+
 import { NextResponse } from 'next/server';
 import connectToDatabase from '@/lib/mongodb';
 import User from '@/models/user';
 import role from '@/models/role';
+
+/**
+ * FIX #1: Force Dynamic Rendering
+ * This export tells Next.js to treat this route as fully dynamic.
+ * It will be executed on the server for every request, bypassing the
+ * Next.js Data Cache entirely. This is the primary solution to your problem.
+ */
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
@@ -14,10 +23,16 @@ export async function GET() {
     }).select('_id');
     
     if (roles.length === 0) {
+      // No staff roles found, this is a valid but empty response.
+      // It should also not be cached.
       return NextResponse.json({
-        success: false,
-        message: 'No manager or receptionist roles found'
-      }, { status: 404 });
+        success: true,
+        staff: []
+      }, {
+        headers: {
+          'Cache-Control': 'no-store',
+        },
+      });
     }
     
     const roleIds = roles.map(role => role._id);
@@ -31,14 +46,25 @@ export async function GET() {
     .populate('roleId', 'name')
     .sort({ name: 1 });
     
+    // Return the successful response
     return NextResponse.json({
       success: true,
       staff: staff.map(user => ({
-        _id: user._id,
+        _id: user._id.toString(), // Good practice to stringify _id
         name: user.name,
         email: user.email,
         role: user.roleId?.name
       }))
+    }, 
+    {
+      /**
+       * FIX #2: Set Cache-Control Header
+       * This header instructs downstream caches (like Netlify's CDN and the browser)
+       * not to store a copy of this response.
+       */
+      headers: {
+        'Cache-Control': 'no-store',
+      },
     });
     
   } catch (error) {

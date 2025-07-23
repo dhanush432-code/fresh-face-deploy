@@ -17,8 +17,8 @@ export interface PerformanceMetrics { customersServed: number; salesGenerated: n
 export interface PerformanceRecordType { id: string; staffId: { id: string; name: string; position: string; image: string | null; }; month: string; year: number; rating: number; comments: string; metrics: PerformanceMetrics; createdAt?: string; updatedAt?: string; }
 export interface NewPerformanceRecordPayload { staffId: string; month: string; year: number; rating: number; comments: string; metrics: PerformanceMetrics; }
 interface PerformanceRecordAPIType { _id: string; staffId: { _id: string; name: string; position: string; image: string | null; }; month: string; year: number; rating: number; comments: string; metrics: PerformanceMetrics; createdAt?: string; updatedAt?: string; }
-export interface SalaryRecordType { id: string; staffId: string | { id: string; name: string; image?: string | null; position?: string; }; month: string; year: number; baseSalary: number; otHours: number; otAmount: number; extraDays: number; extraDayPay: number; foodDeduction: number; recurExpense: number; totalEarnings: number; totalDeductions: number; advanceDeducted: number; netSalary: number; isPaid: boolean; paidDate: string | null; createdAt?: string; updatedAt?: string; staffDetails?: {  id: string;  name: string;  image?: string | null;  position: string;  staffIdNumber?: string; } | null; }
-export interface ProcessSalaryPayload { staffId: string; month: string; year: number; baseSalary: number; otHours: number; otAmount: number; extraDays: number; extraDayPay: number; foodDeduction: number; recurExpense: number; totalEarnings: number; totalDeductions: number; advanceDeducted: number; netSalary: number; isPaid: boolean; paidDate: string | null; }
+export interface SalaryRecordType { id:string; staffId:string | { id:string; name:string; image?:string | null; position?:string; }; month:string; year:number; baseSalary:number; otHours:number; otAmount:number; extraDays:number; extraDayPay:number; foodDeduction:number; recurExpense:number; totalEarnings:number; totalDeductions:number; advanceDeducted:number; netSalary:number; isPaid:boolean; paidDate:string | null; createdAt?:string; updatedAt?:string; staffDetails?: { id:string; name:string; image?:string | null; position:string; staffIdNumber?:string; } | null; }
+export interface ProcessSalaryPayload { staffId:string; month:string; year:number; baseSalary:number; otHours:number; otAmount:number; extraDays:number; extraDayPay:number; foodDeduction:number; recurExpense:number; totalEarnings:number; totalDeductions:number; advanceDeducted:number; netSalary:number; isPaid:boolean; paidDate:string | null; }
 interface PopulatedStaffInfoAPI { _id: string; name: string; image?: string | null; position?: string; staffIdNumber?: string; }
 export interface TemporaryExitTypeAPI { _id: string; attendanceId: string; startTime: string; endTime: string | null; reason: string | null; durationMinutes: number; }
 export interface AttendanceRecordTypeAPI { _id: string; staffId: PopulatedStaffInfoAPI; date: string; checkIn: string | null; checkOut: string | null; status: 'present' | 'absent' | 'late' | 'incomplete' | 'on_leave' | 'week_off'; temporaryExits: TemporaryExitTypeAPI[]; totalWorkingMinutes: number; requiredMinutes: number; isWorkComplete: boolean; notes?: string; createdAt?: string; updatedAt?: string; }
@@ -26,7 +26,6 @@ interface PopulatedStaffInfoFE { id: string; name: string; image?: string | null
 export interface TemporaryExitTypeFE { id: string; attendanceId: string; startTime: Date; endTime: Date | null; reason: string | null; durationMinutes: number; isOngoing: boolean; }
 export interface AttendanceRecordTypeFE { id: string; staff: PopulatedStaffInfoFE; date: Date; checkIn: Date | null; checkOut: Date | null; status: 'present' | 'absent' | 'late' | 'incomplete' | 'on_leave' | 'week_off'; temporaryExits: TemporaryExitTypeFE[]; totalWorkingMinutes: number; requiredMinutes: number; isWorkComplete: boolean; notes?: string; createdAt?: Date; updatedAt?: Date; }
 
-// --- StaffContextType Definition (unchanged structure) ---
 export interface StaffContextType {
   staffMembers: StaffMember[]; loadingStaff: boolean; errorStaff: string | null; fetchStaffMembers: () => Promise<void>; addStaffMember: (staffData: NewStaffPayload) => Promise<StaffMember>; deleteStaffMember: (staffId: string) => Promise<void>; updateStaffMember: (staffId: string, updatedData: UpdateStaffPayload) => Promise<StaffMember>; getStaffById: (staffId: string) => StaffMember | undefined;
   positionOptions: PositionOption[]; addPositionOption: (option: PositionOption) => void;
@@ -49,7 +48,6 @@ export const useStaff = (): StaffContextType => { const context = useContext(Sta
 interface StaffProviderProps { children: ReactNode; }
 const initialPositionOptionsData: PositionOption[] = [ { value: "", label: "Select Position" }, { value: "Lead Stylist", label: "Lead Stylist" }, { value: "Creative Director", label: "Creative Director" }, ];
 
-// --- Helper Functions (unchanged) ---
 const mapApiAttendanceToFE = (apiRecord: AttendanceRecordTypeAPI): AttendanceRecordTypeFE => { const localDate = parseISO(apiRecord.date); return { id: apiRecord._id, staff: { id: apiRecord.staffId._id, name: apiRecord.staffId.name, image: apiRecord.staffId.image, position: apiRecord.staffId.position, staffIdNumber: apiRecord.staffId.staffIdNumber }, date: localDate, checkIn: apiRecord.checkIn ? parseISO(apiRecord.checkIn) : null, checkOut: apiRecord.checkOut ? parseISO(apiRecord.checkOut) : null, status: apiRecord.status, temporaryExits: (apiRecord.temporaryExits || []).map(apiExit => ({ id: apiExit._id, attendanceId: apiExit.attendanceId, startTime: parseISO(apiExit.startTime), endTime: apiExit.endTime ? parseISO(apiExit.endTime) : null, reason: apiExit.reason, durationMinutes: apiExit.durationMinutes, isOngoing: !apiExit.endTime, })).sort((a, b) => a.startTime.getTime() - b.startTime.getTime()), totalWorkingMinutes: apiRecord.totalWorkingMinutes, requiredMinutes: apiRecord.requiredMinutes, isWorkComplete: apiRecord.isWorkComplete, notes: apiRecord.notes, createdAt: apiRecord.createdAt ? parseISO(apiRecord.createdAt) : undefined, updatedAt: apiRecord.updatedAt ? parseISO(apiRecord.updatedAt) : undefined, }; };
 const mapApiPerformanceToFE = (apiRecord: PerformanceRecordAPIType): PerformanceRecordType => ({ id: apiRecord._id, staffId: { id: apiRecord.staffId._id, name: apiRecord.staffId.name, position: apiRecord.staffId.position, image: apiRecord.staffId.image, }, month: apiRecord.month, year: apiRecord.year, rating: apiRecord.rating, comments: apiRecord.comments, metrics: apiRecord.metrics, createdAt: apiRecord.createdAt, updatedAt: apiRecord.updatedAt, });
 async function handleApiResponseError(response: Response, defaultErrorMessage: string): Promise<Error> { let errorMsg = defaultErrorMessage; if (!response.ok) { errorMsg = `HTTP error! status: ${response.status}`; try { const errorData = await response.json(); if (errorData && errorData.error) { errorMsg = errorData.error; } else if (errorData && errorData.message) { errorMsg = errorData.message; } } catch (e) { /* Ignore */ } } else { try { const result = await response.clone().json(); if (result && result.success === false && (result.error || result.message)) { errorMsg = result.error || result.message || defaultErrorMessage; } } catch (e) { /* Ignore */ } } return new Error(errorMsg); }
@@ -110,7 +108,6 @@ export const StaffProvider: React.FC<StaffProviderProps> = ({ children }) => {
     // The page component (`page.tsx`) is now solely responsible for fetching its own attendance data.
   }, [fetchStaffMembers, fetchAdvancePayments]); // The dependency array is also updated.
 
-  // --- Context Value (unchanged) ---
   const contextValue: StaffContextType = {
     staffMembers, loadingStaff, errorStaff, fetchStaffMembers, addStaffMember, deleteStaffMember, updateStaffMember, getStaffById,
     positionOptions, addPositionOption,
@@ -120,6 +117,10 @@ export const StaffProvider: React.FC<StaffProviderProps> = ({ children }) => {
     performanceRecords, loadingPerformance, errorPerformance, fetchPerformanceRecords, recordPerformance,
     salaryRecords, loadingSalary, errorSalary, fetchSalaryRecords, processSalary, markSalaryAsPaid,
   };
-
+  console.log("CONTEXT PROVIDING:", { 
+      loadingStaff, 
+      loadingAttendance, 
+      staffMembersCount: staffMembers.length 
+  });
   return <StaffContext.Provider value={contextValue}>{children}</StaffContext.Provider>;
 };

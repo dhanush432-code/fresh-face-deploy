@@ -404,6 +404,8 @@ const Attendance: React.FC = () => {
     return <div className="flex justify-center items-center h-full w-full cursor-pointer rounded-lg hover:bg-purple-100 transition-colors" title={title} onClick={() => handleCalendarCellClick(staffId, day)}>{icon}</div>;
   };
   
+
+  
   const handleConfirmRemoveWeekOff = async () => {
     if (!weekOffToRemove) return;
     try {
@@ -415,6 +417,7 @@ const Attendance: React.FC = () => {
         setWeekOffToRemove(null);
     }
   };
+  
 
   // --- THE FIX IS HERE ---
   // The typo 'checkin' has been corrected to 'checkIn'.
@@ -667,5 +670,6 @@ const Attendance: React.FC = () => {
       )}
     </div>
   );
+  ;
 };
 export default Attendance;
