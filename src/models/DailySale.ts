@@ -1,12 +1,11 @@
+// models/DailySale.ts
+
 import mongoose, { Document, Schema, Model } from 'mongoose';
 
-// This interface describes the structure of the rule snapshot we will save.
-// It matches the structure of IIncentiveRule.
+// Interface for the rule snapshot. It captures all necessary parameters
+// for a historical calculation, ensuring it's independent of future rule changes.
 interface IAppliedRule {
-  target: {
-    baseAmount: number;
-    multiplierForDouble: number;
-  };
+  target: { multiplier: number };
   sales: {
     includeServiceSale: boolean;
     includeProductSale: boolean;
@@ -20,7 +19,7 @@ interface IAppliedRule {
   };
 }
 
-// ✨ FIX: Add `appliedRule` to your existing IDailySale interface.
+// Updated main interface for a DailySale document.
 export interface IDailySale extends Document {
   staff: mongoose.Types.ObjectId;
   date: Date;
@@ -29,21 +28,33 @@ export interface IDailySale extends Document {
   reviewsWithName: number;
   reviewsWithPhoto: number;
   customerCount: number;
-  appliedRule?: IAppliedRule; // The '?' makes it optional for old records that don't have it.
+  // ✨ NEW: The snapshot field. It's optional ('?') to support older records
+  // that were created before this field was added.
+  appliedRule?: IAppliedRule;
 }
 
-// Define the schema for the sub-document.
+// Schema for the embedded 'appliedRule' sub-document.
+// Using a dedicated schema enforces structure and type safety in the database.
+// `_id: false` prevents Mongoose from creating an _id for this sub-document.
 const AppliedRuleSchema = new Schema<IAppliedRule>({
   target: {
-    baseAmount: { type: Number, required: true },
-    multiplierForDouble: { type: Number, required: true },
+    multiplier: { type: Number, required: true },
   },
-  sales: { /* ... schema definition ... */ },
-  incentive: { /* ... schema definition ... */ }
+  sales: {
+    includeServiceSale: { type: Boolean, required: true },
+    includeProductSale: { type: Boolean, required: true },
+    reviewNameValue: { type: Number, required: true },
+    reviewPhotoValue: { type: Number, required: true },
+  },
+  incentive: {
+    rate: { type: Number, required: true },
+    doubleRate: { type: Number, required: true },
+    applyOn: { type: String, enum: ['totalSaleValue', 'serviceSaleOnly'], required: true },
+  }
 }, { _id: false });
 
 
-// Your original DailySaleSchema, with one new field added.
+// The main schema for DailySale.
 const DailySaleSchema: Schema<IDailySale> = new Schema({
   staff: {
     type: Schema.Types.ObjectId,
@@ -59,13 +70,15 @@ const DailySaleSchema: Schema<IDailySale> = new Schema({
   reviewsWithName: { type: Number, default: 0 },
   reviewsWithPhoto: { type: Number, default: 0 },
   customerCount: { type: Number, default: 0 },
-  // ✨ FIX: Add the field to the schema so it saves to the database.
+  // ✨ NEW: Add the sub-document schema to the main schema.
+  // It's not required, ensuring backward compatibility.
   appliedRule: {
     type: AppliedRuleSchema,
     required: false,
   }
 }, { timestamps: true });
 
+// Index to ensure that a staff member can only have one sales record per day.
 DailySaleSchema.index({ staff: 1, date: 1 }, { unique: true });
 
 const DailySale: Model<IDailySale> = mongoose.models.DailySale || mongoose.model<IDailySale>('DailySale', DailySaleSchema);

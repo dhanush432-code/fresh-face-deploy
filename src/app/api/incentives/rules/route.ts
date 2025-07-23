@@ -1,3 +1,5 @@
+// app/api/incentives/rules/route.ts
+
 import { NextResponse } from 'next/server';
 import dbConnect from '@/lib/mongodb';
 import IncentiveRule from '@/models/IncentiveRule';
@@ -22,34 +24,31 @@ interface IRule {
   };
 }
 
-
-// NEW: A reusable function to check permissions
+// A reusable function to check user permissions
 async function checkPermissions(permission: string) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.role?.permissions) {
     return { error: 'Authentication required.', status: 401 };
   }
-  const userPermissions = session.user.role.permissions;
-  if (!hasPermission(userPermissions, permission)) {
+  if (!hasPermission(session.user.role.permissions, permission)) {
     return { error: 'You do not have permission to perform this action.', status: 403 };
   }
   return null; 
 }
 
-// GET: Fetch the current rules from /api/incentives/rules
+// GET: Fetch the current rules
 export async function GET() {
-    const permissionCheck = await checkPermissions(PERMISSIONS.STAFF_INCENTIVES_READ);
+  const permissionCheck = await checkPermissions(PERMISSIONS.STAFF_INCENTIVES_READ);
   if (permissionCheck) {
     return NextResponse.json({ success: false, error: permissionCheck.error }, { status: permissionCheck.status });
   }
   
   await dbConnect();
   try {
-    // Fetch rules from the database as plain JavaScript objects.
     const dailyRuleDb = await IncentiveRule.findOne({ type: 'daily' }).lean<IRule>();
     const monthlyRuleDb = await IncentiveRule.findOne({ type: 'monthly' }).lean<IRule>();
 
-    // Define the complete default objects. These act as a fallback.
+    // Define complete default objects to act as a fallback and ensure a full object is always returned.
     const defaultDaily: IRule = {
       type: 'daily',
       target: { multiplier: 5 },
@@ -63,22 +62,20 @@ export async function GET() {
       incentive: { rate: 0.05, doubleRate: 0.10, applyOn: 'serviceSaleOnly' }
     };
 
+    // Deep merge defaults with the rules found in the database.
     const daily: IRule = {
         ...defaultDaily,
         ...dailyRuleDb,
-        incentive: {
-            ...defaultDaily.incentive,
-            ...(dailyRuleDb?.incentive || {}), // The DB incentive object overwrites the default.
-        },
+        incentive: { ...defaultDaily.incentive, ...(dailyRuleDb?.incentive || {}) },
+        sales: { ...defaultDaily.sales, ...(dailyRuleDb?.sales || {}) },
+        target: { ...defaultDaily.target, ...(dailyRuleDb?.target || {}) },
     };
-
     const monthly: IRule = {
         ...defaultMonthly,
         ...monthlyRuleDb,
-        incentive: {
-            ...defaultMonthly.incentive,
-            ...(monthlyRuleDb?.incentive || {}), // The DB incentive object overwrites the default.
-        },
+        incentive: { ...defaultMonthly.incentive, ...(monthlyRuleDb?.incentive || {}) },
+        sales: { ...defaultMonthly.sales, ...(monthlyRuleDb?.sales || {}) },
+        target: { ...defaultMonthly.target, ...(monthlyRuleDb?.target || {}) },
     };
 
     return NextResponse.json({ daily, monthly });
@@ -89,10 +86,9 @@ export async function GET() {
   }
 }
 
-// POST: Create or Update rules (This part was already correct and needs no changes)
+// POST: Create or Update rules
 export async function POST(request: Request) {
-
-    const permissionCheck = await checkPermissions(PERMISSIONS.STAFF_INCENTIVES_MANAGE);
+  const permissionCheck = await checkPermissions(PERMISSIONS.STAFF_INCENTIVES_MANAGE);
   if (permissionCheck) {
     return NextResponse.json({ success: false, error: permissionCheck.error }, { status: permissionCheck.status });
   }
@@ -101,6 +97,7 @@ export async function POST(request: Request) {
   try {
     const { daily, monthly } = await request.json();
 
+    // Use findOneAndUpdate with upsert to create the rule if it doesn't exist, or update it if it does.
     if (daily) {
       await IncentiveRule.findOneAndUpdate({ type: 'daily' }, daily, { upsert: true, new: true, setDefaultsOnInsert: true });
     }

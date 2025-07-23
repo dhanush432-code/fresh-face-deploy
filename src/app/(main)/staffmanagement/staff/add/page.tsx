@@ -165,8 +165,7 @@ const AddStaffPage: React.FC = () => {
              setFormData(prev => ({ ...prev, position: firstSelectableOption }));
         }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contextPositionOptions]);
+  }, [contextPositionOptions, formData.position]);
 
   const handleInputChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -244,7 +243,6 @@ const AddStaffPage: React.FC = () => {
     const apiData: NewStaffPayload = {
         staffIdNumber: formData.staffIdNumber,
         name: formData.name,
-        // --- FIX: Pass undefined if email is empty to match the optional type ---
         email: formData.email || undefined,
         phone: formData.phone,
         position: formData.position,
@@ -260,12 +258,10 @@ const AddStaffPage: React.FC = () => {
 
     try {
       await addStaffMember(apiData);
-      toast.success('Staff member added successfully!');
-      router.push('/staffmanagement/staff/stafflist');
+      router.push('/staffmanagement/staff/stafflist?success=add');
     } catch (apiError: any) {
       console.error('Failed to add staff member:', apiError);
       toast.error(apiError.message || 'Failed to add staff member. Please try again.');
-    } finally {
       setIsSubmitting(false);
     }
   };
@@ -326,7 +322,7 @@ const AddStaffPage: React.FC = () => {
           
           <div>
             <IconLabel htmlFor="staffIdNumber" icon={<Badge size={14} className="text-gray-500" />} text="Staff ID*" />
-            <input id="staffIdNumber" name="staffIdNumber" type="text" required value={formData.staffIdNumber} onChange={handleInputChange} className="w-full rounded-md border border-gray-300 px-3 py-2 text-black focus:outline-none focus:ring-1 focus:ring-black focus:border-black bg-gray-100 cursor-not-allowed" disabled={isSubmitting} readOnly />
+            <input id="staffIdNumber" name="staffIdNumber" type="text" required value={formData.staffIdNumber} className="w-full rounded-md border border-gray-300 px-3 py-2 text-black focus:outline-none focus:ring-1 focus:ring-black focus:border-black bg-gray-100 cursor-not-allowed" readOnly />
           </div>
           <div>
             <IconLabel htmlFor="name" icon={<User size={14} className="text-gray-500" />} text="Full Name*" />
@@ -412,7 +408,7 @@ const AddStaffPage: React.FC = () => {
         </div>
 
         <div className="mt-8 flex justify-end space-x-3">
-          <Button type="button" variant="outline-danger" onClick={() => router.back()} disabled={isSubmitting}>Cancel</Button>
+          <Button type="button" variant="outline" onClick={() => router.back()} disabled={isSubmitting}>Cancel</Button>
           <Button type="submit" variant="black" icon={<Save size={16} />} disabled={isSubmitting} isLoading={isSubmitting}>
             {isSubmitting ? 'Saving...' : 'Save Staff Member'}
           </Button>

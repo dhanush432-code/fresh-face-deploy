@@ -1,4 +1,5 @@
 // src/app/api/staff/route.ts
+
 import { NextRequest, NextResponse } from 'next/server';
 import dbConnect from '../../../lib/mongodb';
 import Staff, { IStaff } from '../../../models/staff';
@@ -16,16 +17,16 @@ const isValidObjectId = (id: string): boolean => mongoose.Types.ObjectId.isValid
 type LeanStaffDocument = Omit<IStaff, keyof mongoose.Document<Types.ObjectId>> & { _id: Types.ObjectId };
 
 /**
- * Reads the current start number from the shop settings.
- * Used to pre-fill the Staff ID field on the ADD staff page.
+ * Reads the next available staff ID directly from the settings.
+ * This function now returns the number exactly as it is in the settings.
  */
 async function getNextStaffId(): Promise<string> {
     await dbConnect();
     const settings = await ShopSetting.findOne({ key: 'defaultSettings' }).lean();
-    const startNumber = settings?.staffIdBaseNumber || 1;
-    return startNumber.toString();
+    // The base number is now treated as the NEXT available number.
+    const nextNumber = settings?.staffIdBaseNumber || 1;
+    return nextNumber.toString();
 }
-
 
 async function checkPermissions(permission: string) {
   const session = await getServerSession(authOptions);
@@ -49,7 +50,6 @@ export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const action = searchParams.get('action');
   const staffId = searchParams.get('id');
-  const position = searchParams.get('position');
 
   try {
     if (action === 'getNextId') {
@@ -83,7 +83,6 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  
   const permissionCheck = await checkPermissions(PERMISSIONS.STAFF_LIST_CREATE);
   if (permissionCheck) {
     return NextResponse.json({ success: false, error: permissionCheck.error }, { status: permissionCheck.status });
@@ -93,45 +92,32 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { 
+        staffIdNumber, 
         name, email, position, phone, salary, address, image, aadharNumber, joinDate,
         aadharImage, passbookImage, agreementImage 
     } = body;
 
-    // --- CHANGE 1: Updated the validation logic ---
-    // Email is now optional. Phone and Aadhar Number are now required.
-    if (!name || !phone || !position || !aadharNumber) {
+    if (!staffIdNumber || !name || !phone || !position || !aadharNumber) {
       return NextResponse.json({ 
         success: false, 
-        error: 'Name, phone, position, and Aadhar Number are required' 
+        error: 'Staff ID, Name, phone, position, and Aadhar Number are required' 
       }, { status: 400 });
     }
-
-    const settings = await ShopSetting.findOneAndUpdate(
-        { key: 'defaultSettings' },
-        { $inc: { staffIdBaseNumber: 1 } },
-        { new: false, upsert: true }
-    );
-
-    const newStaffIdNumber = (settings?.staffIdBaseNumber || 1).toString();
-
-    // --- CHANGE 2: Updated the duplicate check to only check for email if it's provided ---
-    // This prevents errors if multiple staff members have no email.
+    
+    // Check for duplicates using the ID from the form
     const existingStaff = await Staff.findOne({
         $or: [
-            { staffIdNumber: newStaffIdNumber },
-            ...(email ? [{ email }] : []), // Only check for email if it's not an empty string
+            { staffIdNumber: staffIdNumber },
+            ...(email ? [{ email }] : []),
             ...(aadharNumber ? [{ aadharNumber }] : [])
         ]
     }).lean();
 
     if (existingStaff) {
-        // Rollback the staffIdBaseNumber increment if creation fails
-        await ShopSetting.updateOne({ key: 'defaultSettings' }, { $inc: { staffIdBaseNumber: -1 } });
-        
         let errorMessage = 'A user with this data already exists.';
-        if (existingStaff.staffIdNumber === newStaffIdNumber) {
-            errorMessage = `Staff ID ${newStaffIdNumber} already exists. Please check settings and try again.`;
-        } else if (email && existingStaff.email === email) { // Check 'email' variable before accessing property
+        if (existingStaff.staffIdNumber === staffIdNumber) {
+            errorMessage = `Staff ID ${staffIdNumber} already exists. Please try again.`;
+        } else if (email && existingStaff.email === email) {
             errorMessage = 'Email already exists.';
         } else if (aadharNumber && existingStaff.aadharNumber === aadharNumber) {
             errorMessage = 'Aadhar number already exists.';
@@ -140,9 +126,9 @@ export async function POST(request: NextRequest) {
     }
 
     const newStaffDoc = new Staff({
-      staffIdNumber: newStaffIdNumber,
+      staffIdNumber: staffIdNumber,
       name, 
-      email: email || null, // Ensure empty email is stored as null
+      email: email || null,
       position, phone, salary, address, aadharNumber, joinDate,
       image: image || null,
       aadharImage: aadharImage || null,
@@ -151,6 +137,13 @@ export async function POST(request: NextRequest) {
       status: 'active',
     });
     const savedStaff = await newStaffDoc.save();
+
+    // After successfully saving the staff member, increment the setting for the next user.
+    await ShopSetting.updateOne(
+        { key: 'defaultSettings' },
+        { $inc: { staffIdBaseNumber: 1 } },
+        { upsert: true }
+    );
 
     if (savedStaff.position.toLowerCase().trim() === 'stylist') {
       const existingStylist = await Stylist.findOne({ staffInfo: savedStaff._id });
@@ -167,8 +160,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, data: {...staffObject, id: savedStaff._id.toString()} }, { status: 201 });
   } catch (error: any) {
     console.error('Error adding staff:', error);
-    // Attempt to roll back the number on any error during the creation process
-    await ShopSetting.updateOne({ key: 'defaultSettings' }, { $inc: { staffIdBaseNumber: -1 } });
     if (error.name === 'ValidationError') {
         return NextResponse.json({ success: false, error: error.message }, { status: 400 });
     }

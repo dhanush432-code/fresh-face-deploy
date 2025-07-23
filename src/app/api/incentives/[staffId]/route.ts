@@ -1,181 +1,166 @@
-  import { NextResponse } from 'next/server';
-  import dbConnect from '@/lib/mongodb';
-  import DailySale from '@/models/DailySale';
-  import Staff from '@/models/staff';
-  import IncentiveRule from '@/models/IncentiveRule';
+// app/api/incentives/calculation/[staffId]/route.ts
 
-  export const dynamic = 'force-dynamic';
+import { NextResponse } from 'next/server';
+import dbConnect from '@/lib/mongodb';
+import DailySale, { IDailySale } from '@/models/DailySale'; // Import IDailySale
+import Staff from '@/models/staff';
+import IncentiveRule from '@/models/IncentiveRule';
 
-  // A strong interface for our Rule object.
-  interface IRule {
-    type: 'daily' | 'monthly';
-    target: { multiplier: number };
-    sales: {
-      includeServiceSale: boolean;
-      includeProductSale: boolean;
-      reviewNameValue: number;
-      reviewPhotoValue: number;
-    };
-    incentive: {
-      rate: number;
-      doubleRate: number;
-      applyOn: 'totalSaleValue' | 'serviceSaleOnly';
-    };
+export const dynamic = 'force-dynamic';
+
+// Interface for a full rule object.
+interface IRule {
+  type: 'daily' | 'monthly';
+  target: { multiplier: number };
+  sales: {
+    includeServiceSale: boolean;
+    includeProductSale: boolean;
+    reviewNameValue: number;
+    reviewPhotoValue: number;
+  };
+  incentive: {
+    rate: number;
+    doubleRate: number;
+    applyOn: 'totalSaleValue' | 'serviceSaleOnly';
+  };
+}
+
+// Helper function: Get actual days in a specific month
+function getDaysInMonth(year: number, month: number): number {
+  return new Date(year, month + 1, 0).getDate();
+}
+
+// Helper function: Calculates incentive
+function calculateIncentiveWithDoubleTarget(
+  achievedValue: number,
+  targetValue: number,
+  rule: IRule,
+  baseForIncentive: number
+) {
+  let incentive = 0;
+  let appliedRate = 0;
+  const isTargetMet = achievedValue >= targetValue;
+
+  if (isTargetMet) {
+    const doubleTargetValue = targetValue * 2;
+    if (achievedValue >= doubleTargetValue) {
+      appliedRate = rule.incentive.doubleRate;
+      incentive = baseForIncentive * rule.incentive.doubleRate;
+    } else {
+      appliedRate = rule.incentive.rate;
+      incentive = baseForIncentive * rule.incentive.rate;
+    }
   }
+  return { incentive, isTargetMet, appliedRate };
+}
 
-  // HELPER FUNCTION: Get actual days in a specific month
-  function getDaysInMonth(year: number, month: number): number {
-    // month is 0-indexed (0 = January, 11 = December)
-    return new Date(year, month + 1, 0).getDate();
-  }
+// MAIN GET HANDLER
+export async function GET(request: Request, { params }: { params: { staffId: string } }) {
+  try {
+    await dbConnect();
+    const { staffId } = params;
+    const { searchParams } = new URL(request.url);
+    const dateQuery = searchParams.get('date');
 
-  // HELPER FUNCTION: Calculates incentive, applying a double rate if the double target is met.
-  function calculateIncentiveWithDoubleTarget(
-    achievedValue: number,
-    targetValue: number,
-    rule: IRule,
-    baseForIncentive: number
-  ) {
-    let incentive = 0;
-    let appliedRate = 0;
-    const isTargetMet = achievedValue >= targetValue;
+    if (!dateQuery) {
+      return NextResponse.json({ message: 'Date query parameter is required.' }, { status: 400 });
+    }
 
-    if (isTargetMet) {
-      const doubleTargetValue = targetValue * 2;
-      // Check if the double target is achieved
-      if (achievedValue >= doubleTargetValue) {
-        appliedRate = rule.incentive.doubleRate;
-        incentive = baseForIncentive * rule.incentive.doubleRate;
+    const staff = await Staff.findById(staffId).lean();
+    if (!staff) return NextResponse.json({ message: 'Staff member not found.' }, { status: 404 });
+    if (!staff.salary) return NextResponse.json({ message: 'Cannot calculate: Staff salary is not set.' }, { status: 400 });
+
+    const [year, month, day] = dateQuery.split('-').map(Number);
+    const targetDate = new Date(Date.UTC(year, month - 1, day));
+
+    // --- Incentive 1: Daily Target Calculation ---
+    // Fetch the sale record, which may contain the `appliedRule`.
+    const dailySaleRecord = await DailySale.findOne({ staff: staffId, date: targetDate }).lean<IDailySale>();
+    let dailyResult = {};
+
+    if (dailySaleRecord) {
+      // ✨ --- START: Rule Determination Logic ---
+      let dailyRuleToUse: IRule;
+      let ruleUsedSource = '';
+
+      if (dailySaleRecord.appliedRule) {
+        // PRIORITY 1: A rule was snapshotted. Use it for the calculation.
+        ruleUsedSource = 'Snapshotted Rule (Historical)';
+        dailyRuleToUse = { type: 'daily', ...dailySaleRecord.appliedRule };
       } else {
-        // If only the single target is met
-        appliedRate = rule.incentive.rate;
-        incentive = baseForIncentive * rule.incentive.rate;
+        // PRIORITY 2 (FALLBACK): No snapshot exists (e.g., for old data).
+        // Fetch the CURRENT rule from the database as a fallback.
+        ruleUsedSource = 'Current Rule (Fallback)';
+        const defaultDaily: IRule = { type: 'daily', target: { multiplier: 5 }, sales: { includeServiceSale: true, includeProductSale: true, reviewNameValue: 200, reviewPhotoValue: 300 }, incentive: { rate: 0.05, doubleRate: 0.10, applyOn: 'totalSaleValue' } };
+        const dailyRuleDb = await IncentiveRule.findOne({ type: 'daily' }).lean<IRule>();
+        dailyRuleToUse = dailyRuleDb ? { ...defaultDaily, ...dailyRuleDb, incentive: { ...defaultDaily.incentive, ...(dailyRuleDb.incentive || {}) } } : defaultDaily;
       }
-    }
+      // ✨ --- END: Rule Determination Logic ---
 
-    return { incentive, isTargetMet, appliedRate };
-  }
+      const daysInMonth = getDaysInMonth(targetDate.getUTCFullYear(), targetDate.getUTCMonth());
+      const dailyTarget = (staff.salary * dailyRuleToUse.target.multiplier) / daysInMonth;
 
-  // MAIN GET HANDLER: Fetches data and calculates incentives for a specific staff member and date.
-  export async function GET(request: Request, { params }: { params: { staffId: string } }) {
-    try {
-      await dbConnect();
-      const { staffId } = params;
-      const { searchParams } = new URL(request.url);
-      const dateQuery = searchParams.get('date');
+      const dailyAchievedValue =
+        (dailyRuleToUse.sales.includeServiceSale ? dailySaleRecord.serviceSale : 0) +
+        (dailyRuleToUse.sales.includeProductSale ? dailySaleRecord.productSale : 0) +
+        (dailySaleRecord.reviewsWithName * dailyRuleToUse.sales.reviewNameValue) +
+        (dailySaleRecord.reviewsWithPhoto * dailyRuleToUse.sales.reviewPhotoValue);
 
-      if (!dateQuery) {
-        return NextResponse.json({ message: 'Date query parameter is required.' }, { status: 400 });
-      }
-
-      const staff = await Staff.findById(staffId).lean();
-      if (!staff) return NextResponse.json({ message: 'Staff member not found.' }, { status: 404 });
-      if (!staff.salary) return NextResponse.json({ message: 'Cannot calculate: Staff salary is not set.' }, { status: 400 });
-
-      // Define complete default rules as a fallback.
-      const defaultDaily: IRule = { type: 'daily', target: { multiplier: 5 }, sales: { includeServiceSale: true, includeProductSale: true, reviewNameValue: 200, reviewPhotoValue: 300 }, incentive: { rate: 0.05, doubleRate: 0.10, applyOn: 'totalSaleValue' } };
-      const defaultMonthly: IRule = { type: 'monthly', target: { multiplier: 5 }, sales: { includeServiceSale: true, includeProductSale: false, reviewNameValue: 0, reviewPhotoValue: 0 }, incentive: { rate: 0.05, doubleRate: 0.10, applyOn: 'serviceSaleOnly' } };
+      const dailyBaseForIncentive = dailyRuleToUse.incentive.applyOn === 'serviceSaleOnly'
+        ? dailySaleRecord.serviceSale
+        : dailyAchievedValue;
       
-      // Fetch rules from DB, correctly typed as `IRule | null`.
-      const dailyRuleDb = await IncentiveRule.findOne({ type: 'daily' }).lean<IRule>();
-      const monthlyRuleDb = await IncentiveRule.findOne({ type: 'monthly' }).lean<IRule>();
-
-      // Merge default rules with DB rules
-      const dailyRule: IRule = dailyRuleDb ? {
-          ...defaultDaily,
-          ...dailyRuleDb,
-          incentive: {
-              ...defaultDaily.incentive,
-              ...(dailyRuleDb.incentive || {}),
-          },
-      } : defaultDaily;
-
-      const monthlyRule: IRule = monthlyRuleDb ? {
-          ...defaultMonthly,
-          ...monthlyRuleDb,
-          incentive: {
-              ...defaultMonthly.incentive,
-              ...(monthlyRuleDb.incentive || {}),
-          },
-      } : defaultMonthly;
+      const { incentive, isTargetMet, appliedRate } = calculateIncentiveWithDoubleTarget(dailyAchievedValue, dailyTarget, dailyRuleToUse, dailyBaseForIncentive);
       
-      // Use timezone-safe date parsing to match the DB record correctly.
-      const [year, month, day] = dateQuery.split('-').map(Number);
-      const targetDate = new Date(Date.UTC(year, month - 1, day));
-
-      // --- Incentive 1: Daily Target Calculation ---
-      const dailySaleRecord = await DailySale.findOne({ staff: staffId, date: targetDate });
-      let dailyResult = {};
-
-      if (dailySaleRecord) {
-          // Get the actual days in the target month (28, 29, 30, or 31)
-          const daysInMonth = getDaysInMonth(targetDate.getUTCFullYear(), targetDate.getUTCMonth());
-          
-          // Calculate daily target based on actual days in the month
-          const dailyTarget = (staff.salary * dailyRule.target.multiplier) / daysInMonth;
-          
-          console.log(`Month: ${targetDate.getUTCMonth() + 1}/${targetDate.getUTCFullYear()}`);
-          console.log(`Days in month: ${daysInMonth}`);
-          console.log(`Staff salary: ${staff.salary}`);
-          console.log(`Daily rule multiplier: ${dailyRule.target.multiplier}`);
-          console.log(`Daily target: ${dailyTarget}`);
-          
-          const dailyAchievedValue = 
-              (dailyRule.sales.includeServiceSale ? dailySaleRecord.serviceSale : 0) + 
-              (dailyRule.sales.includeProductSale ? dailySaleRecord.productSale : 0) +
-              (dailySaleRecord.reviewsWithName * dailyRule.sales.reviewNameValue) +
-              (dailySaleRecord.reviewsWithPhoto * dailyRule.sales.reviewPhotoValue);
-
-          const dailyBaseForIncentive = dailyRule.incentive.applyOn === 'serviceSaleOnly' 
-              ? dailySaleRecord.serviceSale 
-              : dailyAchievedValue;
-          
-          const { incentive, isTargetMet, appliedRate } = calculateIncentiveWithDoubleTarget(dailyAchievedValue, dailyTarget, dailyRule, dailyBaseForIncentive);
-          
-          dailyResult = { 
-              targetValue: dailyTarget, 
-              achievedValue: dailyAchievedValue, 
-              incentiveAmount: incentive,
-              isTargetMet, 
-              appliedRate,
-              daysInMonth // Add this for debugging
-          };
-      }
-
-      // --- Incentive 2: Monthly Target Calculation ---
-      const startDate = new Date(Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), 1));
-      const endDate = new Date(Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth() + 1, 0, 23, 59, 59));
-      
-      const monthlySalesData = await DailySale.find({ staff: staffId, date: { $gte: startDate, $lte: endDate } });
-      
-      const totalMonthlyServiceSale = monthlySalesData.reduce((sum, sale) => sum + sale.serviceSale, 0);
-      const totalMonthlyProductSale = monthlySalesData.reduce((sum, sale) => sum + sale.productSale, 0);
-      const monthlyTarget = staff.salary * monthlyRule.target.multiplier;
-
-      const monthlyAchievedValue = (monthlyRule.sales.includeServiceSale ? totalMonthlyServiceSale : 0) + (monthlyRule.sales.includeProductSale ? totalMonthlyProductSale : 0);
-      const monthlyBaseForIncentive = monthlyRule.incentive.applyOn === 'serviceSaleOnly' ? totalMonthlyServiceSale : monthlyAchievedValue;
-      
-      const { incentive: monthlyIncentive, isTargetMet: isMonthlyTargetMet, appliedRate: monthlyAppliedRate } = calculateIncentiveWithDoubleTarget(monthlyAchievedValue, monthlyTarget, monthlyRule, monthlyBaseForIncentive);
-      
-      const monthlyResult = { 
-          targetValue: monthlyTarget, 
-          achievedValue: monthlyAchievedValue, 
-          incentiveAmount: monthlyIncentive, 
-          isTargetMet: isMonthlyTargetMet, 
-          appliedRate: monthlyAppliedRate, 
-          totalMonthlyServiceSale 
+      dailyResult = { 
+        targetValue: dailyTarget, 
+        achievedValue: dailyAchievedValue, 
+        incentiveAmount: incentive,
+        isTargetMet, 
+        appliedRate,
+        ruleUsedSource // Add for debugging to see which rule was used
       };
-
-      // Return the final, correctly calculated data.
-      return NextResponse.json({
-        staffName: staff.name,
-        calculationDate: targetDate.toISOString().split('T')[0],
-        incentive1_daily: dailyResult,
-        incentive2_monthly: monthlyResult,
-      });
-
-    } catch (error: any) {
-      console.error("API GET /incentives/[staffId] Error:", error);
-      return NextResponse.json({ message: 'An internal server error occurred during calculation.', error: error.message }, { status: 500 });
     }
+
+    // --- Incentive 2: Monthly Target Calculation ---
+    // This logic remains the same. A monthly incentive is typically calculated based on
+    // the rules active at the end of the month, applied to the sum of all sales in that month.
+    const defaultMonthly: IRule = { type: 'monthly', target: { multiplier: 5 }, sales: { includeServiceSale: true, includeProductSale: false, reviewNameValue: 0, reviewPhotoValue: 0 }, incentive: { rate: 0.05, doubleRate: 0.10, applyOn: 'serviceSaleOnly' } };
+    const monthlyRuleDb = await IncentiveRule.findOne({ type: 'monthly' }).lean<IRule>();
+    const monthlyRule: IRule = monthlyRuleDb ? { ...defaultMonthly, ...monthlyRuleDb, incentive: { ...defaultMonthly.incentive, ...(monthlyRuleDb.incentive || {}) } } : defaultMonthly;
+    
+    const startDate = new Date(Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), 1));
+    const endDate = new Date(Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth() + 1, 0, 23, 59, 59));
+    
+    const monthlySalesData = await DailySale.find({ staff: staffId, date: { $gte: startDate, $lte: endDate } });
+    
+    const totalMonthlyServiceSale = monthlySalesData.reduce((sum, sale) => sum + sale.serviceSale, 0);
+    const totalMonthlyProductSale = monthlySalesData.reduce((sum, sale) => sum + sale.productSale, 0);
+    const monthlyTarget = staff.salary * monthlyRule.target.multiplier;
+
+    const monthlyAchievedValue = (monthlyRule.sales.includeServiceSale ? totalMonthlyServiceSale : 0) + (monthlyRule.sales.includeProductSale ? totalMonthlyProductSale : 0);
+    const monthlyBaseForIncentive = monthlyRule.incentive.applyOn === 'serviceSaleOnly' ? totalMonthlyServiceSale : monthlyAchievedValue;
+    
+    const { incentive: monthlyIncentive, isTargetMet: isMonthlyTargetMet, appliedRate: monthlyAppliedRate } = calculateIncentiveWithDoubleTarget(monthlyAchievedValue, monthlyTarget, monthlyRule, monthlyBaseForIncentive);
+    
+    const monthlyResult = { 
+      targetValue: monthlyTarget, 
+      achievedValue: monthlyAchievedValue, 
+      incentiveAmount: monthlyIncentive, 
+      isTargetMet: isMonthlyTargetMet, 
+      appliedRate: monthlyAppliedRate, 
+      totalMonthlyServiceSale 
+    };
+
+    return NextResponse.json({
+      staffName: staff.name,
+      calculationDate: targetDate.toISOString().split('T')[0],
+      incentive1_daily: dailyResult,
+      incentive2_monthly: monthlyResult,
+    });
+
+  } catch (error: any) {
+    console.error("API GET /incentives/calculation/[staffId] Error:", error);
+    return NextResponse.json({ message: 'An internal server error occurred.', error: error.message }, { status: 500 });
   }
+}
