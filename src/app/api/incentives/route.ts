@@ -13,17 +13,8 @@ import { PERMISSIONS, hasPermission } from '@/lib/permissions';
 interface IRule {
   type: 'daily' | 'monthly';
   target: { multiplier: number };
-  sales: {
-    includeServiceSale: boolean;
-    includeProductSale: boolean;
-    reviewNameValue: number;
-    reviewPhotoValue: number;
-  };
-  incentive: {
-    rate: number;
-    doubleRate: number;
-    applyOn: 'totalSaleValue' | 'serviceSaleOnly';
-  };
+  sales: { includeServiceSale: boolean; includeProductSale: boolean; reviewNameValue: number; reviewPhotoValue: number; };
+  incentive: { rate: number; doubleRate: number; applyOn: 'totalSaleValue' | 'serviceSaleOnly'; };
 }
 
 // Reusable permission checker
@@ -57,29 +48,23 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: 'Staff not found.' }, { status: 404 });
     }
 
-    // ✨ --- START: Snapshot Logic ---
-    // 1. Define a robust default rule as a fallback.
-    const defaultDaily: IRule = { type: 'daily', target: { multiplier: 5 }, sales: { includeServiceSale: true, includeProductSale: true, reviewNameValue: 200, reviewPhotoValue: 300 }, incentive: { rate: 0.05, doubleRate: 0.10, applyOn: 'totalSaleValue' } };
+    // ✨ --- START: Rule Snapshot Logic ---
+    // This is the most critical part for ensuring future data consistency.
+    
+    // 1. Define a robust default rule as a fallback in case the DB rule is missing.
+    const defaultDaily: Omit<IRule, 'type'> = { target: { multiplier: 5 }, sales: { includeServiceSale: true, includeProductSale: true, reviewNameValue: 200, reviewPhotoValue: 300 }, incentive: { rate: 0.05, doubleRate: 0.10, applyOn: 'totalSaleValue' } };
     
     // 2. Fetch the current daily rule from the database.
     const dailyRuleDb = await IncentiveRule.findOne({ type: 'daily' }).lean<IRule>();
     
-    // 3. Merge the database rule with the default to create a complete, current rule object.
-    const currentDailyRule: IRule = {
-        ...defaultDaily,
-        ...dailyRuleDb,
-        incentive: { ...defaultDaily.incentive, ...(dailyRuleDb?.incentive || {}) },
-        sales: { ...defaultDaily.sales, ...(dailyRuleDb?.sales || {}) },
-        target: { ...defaultDaily.target, ...(dailyRuleDb?.target || {}) },
-    };
-    
-    // 4. Create the clean snapshot object to be saved in the database.
+    // 3. Create the clean snapshot object to be saved.
+    //    It merges the DB rule over the default to ensure all fields are present.
     const ruleSnapshot = {
-        target: currentDailyRule.target,
-        sales: currentDailyRule.sales,
-        incentive: currentDailyRule.incentive
+        target: { ...defaultDaily.target, ...(dailyRuleDb?.target || {}) },
+        sales: { ...defaultDaily.sales, ...(dailyRuleDb?.sales || {}) },
+        incentive: { ...defaultDaily.incentive, ...(dailyRuleDb?.incentive || {}) }
     };
-    // ✨ --- END: Snapshot Logic ---
+    // ✨ --- END: Rule Snapshot Logic ---
 
     // Use UTC date to avoid timezone issues.
     const [year, month, day] = date.split('-').map(Number);
@@ -95,15 +80,15 @@ export async function POST(request: Request) {
           reviewsWithName,
           reviewsWithPhoto,
         },
-        // ✨ FIX: Use $set to save or update the rule snapshot every time data is saved.
-        // This is the key that attaches the rule to the record.
+        // ✨ KEY FIX: Use $set to save or update the rule snapshot every time data is logged.
+        // This attaches the rule that was active AT THAT MOMENT to the record itself.
         $set: {
           appliedRule: ruleSnapshot
         }
       },
       { 
         new: true,
-        upsert: true,
+        upsert: true, // Creates the record if it doesn't exist
         setDefaultsOnInsert: true
       }
     );

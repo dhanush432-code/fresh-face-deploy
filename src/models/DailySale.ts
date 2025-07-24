@@ -28,14 +28,14 @@ export interface IDailySale extends Document {
   reviewsWithName: number;
   reviewsWithPhoto: number;
   customerCount: number;
-  // ✨ NEW: The snapshot field. It's optional ('?') to support older records
-  // that were created before this field was added.
+  // ✨ The snapshot field. It's optional ('?') in the interface to support
+  // older records that were created before this field was added.
   appliedRule?: IAppliedRule;
 }
 
 // Schema for the embedded 'appliedRule' sub-document.
 // Using a dedicated schema enforces structure and type safety in the database.
-// `_id: false` prevents Mongoose from creating an _id for this sub-document.
+// `_id: false` prevents Mongoose from creating a separate _id for this sub-document.
 const AppliedRuleSchema = new Schema<IAppliedRule>({
   target: {
     multiplier: { type: Number, required: true },
@@ -70,8 +70,9 @@ const DailySaleSchema: Schema<IDailySale> = new Schema({
   reviewsWithName: { type: Number, default: 0 },
   reviewsWithPhoto: { type: Number, default: 0 },
   customerCount: { type: Number, default: 0 },
-  // ✨ NEW: Add the sub-document schema to the main schema.
-  // It's not required, ensuring backward compatibility.
+  // ✨ Add the sub-document schema to the main schema.
+  // `required: false` ensures backward compatibility with old records that
+  // do not have this field. This is crucial for a smooth deployment.
   appliedRule: {
     type: AppliedRuleSchema,
     required: false,
@@ -81,6 +82,7 @@ const DailySaleSchema: Schema<IDailySale> = new Schema({
 // Index to ensure that a staff member can only have one sales record per day.
 DailySaleSchema.index({ staff: 1, date: 1 }, { unique: true });
 
+// This pattern prevents Mongoose from recompiling the model on every hot-reload.
 const DailySale: Model<IDailySale> = mongoose.models.DailySale || mongoose.model<IDailySale>('DailySale', DailySaleSchema);
 
 export default DailySale;
