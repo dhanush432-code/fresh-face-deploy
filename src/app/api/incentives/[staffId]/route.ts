@@ -2,41 +2,24 @@
 
 import { NextResponse } from 'next/server';
 import dbConnect from '@/lib/mongodb';
-import DailySale, { IDailySale } from '@/models/DailySale'; // Import IDailySale
+import DailySale, { IDailySale } from '@/models/DailySale';
 import Staff from '@/models/staff';
 import IncentiveRule from '@/models/IncentiveRule';
 
 export const dynamic = 'force-dynamic';
 
-// Interface for a full rule object.
 interface IRule {
   type: 'daily' | 'monthly';
   target: { multiplier: number };
-  sales: {
-    includeServiceSale: boolean;
-    includeProductSale: boolean;
-    reviewNameValue: number;
-    reviewPhotoValue: number;
-  };
-  incentive: {
-    rate: number;
-    doubleRate: number;
-    applyOn: 'totalSaleValue' | 'serviceSaleOnly';
-  };
+  sales: { includeServiceSale: boolean; includeProductSale: boolean; reviewNameValue: number; reviewPhotoValue: number; };
+  incentive: { rate: number; doubleRate: number; applyOn: 'totalSaleValue' | 'serviceSaleOnly'; };
 }
 
-// Helper function: Get actual days in a specific month
 function getDaysInMonth(year: number, month: number): number {
   return new Date(year, month + 1, 0).getDate();
 }
 
-// Helper function: Calculates incentive
-function calculateIncentiveWithDoubleTarget(
-  achievedValue: number,
-  targetValue: number,
-  rule: IRule,
-  baseForIncentive: number
-) {
+function calculateIncentiveWithDoubleTarget(achievedValue: number, targetValue: number, rule: IRule, baseForIncentive: number) {
   let incentive = 0;
   let appliedRate = 0;
   const isTargetMet = achievedValue >= targetValue;
@@ -54,7 +37,6 @@ function calculateIncentiveWithDoubleTarget(
   return { incentive, isTargetMet, appliedRate };
 }
 
-// MAIN GET HANDLER
 export async function GET(request: Request, { params }: { params: { staffId: string } }) {
   try {
     await dbConnect();
@@ -73,23 +55,22 @@ export async function GET(request: Request, { params }: { params: { staffId: str
     const [year, month, day] = dateQuery.split('-').map(Number);
     const targetDate = new Date(Date.UTC(year, month - 1, day));
 
-    // --- Incentive 1: Daily Target Calculation ---
-    // Fetch the sale record, which may contain the `appliedRule`.
     const dailySaleRecord = await DailySale.findOne({ staff: staffId, date: targetDate }).lean<IDailySale>();
     let dailyResult = {};
 
     if (dailySaleRecord) {
-      // ✨ --- START: Rule Determination Logic ---
+      // ✨ --- START: Robust Rule Determination Logic ---
       let dailyRuleToUse: IRule;
       let ruleUsedSource = '';
 
-      if (dailySaleRecord.appliedRule) {
-        // PRIORITY 1: A rule was snapshotted. Use it for the calculation.
+      if (dailySaleRecord.appliedRule && dailySaleRecord.appliedRule.target) {
+        // PRIORITY 1: A rule was snapshotted on the record. ALWAYS use this for consistency.
         ruleUsedSource = 'Snapshotted Rule (Historical)';
         dailyRuleToUse = { type: 'daily', ...dailySaleRecord.appliedRule };
       } else {
-        // PRIORITY 2 (FALLBACK): No snapshot exists (e.g., for old data).
-        // Fetch the CURRENT rule from the database as a fallback.
+        // PRIORITY 2 (FALLBACK): Only triggered for old data without a snapshot.
+        // After running the data migration script, this path should rarely be taken.
+        console.warn(`[Incentive Calc] Fallback rule used for staff ${staffId} on ${dateQuery}. Record is missing 'appliedRule'.`);
         ruleUsedSource = 'Current Rule (Fallback)';
         const defaultDaily: IRule = { type: 'daily', target: { multiplier: 5 }, sales: { includeServiceSale: true, includeProductSale: true, reviewNameValue: 200, reviewPhotoValue: 300 }, incentive: { rate: 0.05, doubleRate: 0.10, applyOn: 'totalSaleValue' } };
         const dailyRuleDb = await IncentiveRule.findOne({ type: 'daily' }).lean<IRule>();
@@ -118,13 +99,11 @@ export async function GET(request: Request, { params }: { params: { staffId: str
         incentiveAmount: incentive,
         isTargetMet, 
         appliedRate,
-        ruleUsedSource // Add for debugging to see which rule was used
+        ruleUsedSource // Essential for debugging!
       };
     }
 
-    // --- Incentive 2: Monthly Target Calculation ---
-    // This logic remains the same. A monthly incentive is typically calculated based on
-    // the rules active at the end of the month, applied to the sum of all sales in that month.
+    // --- Incentive 2: Monthly Target Calculation (No changes needed here) ---
     const defaultMonthly: IRule = { type: 'monthly', target: { multiplier: 5 }, sales: { includeServiceSale: true, includeProductSale: false, reviewNameValue: 0, reviewPhotoValue: 0 }, incentive: { rate: 0.05, doubleRate: 0.10, applyOn: 'serviceSaleOnly' } };
     const monthlyRuleDb = await IncentiveRule.findOne({ type: 'monthly' }).lean<IRule>();
     const monthlyRule: IRule = monthlyRuleDb ? { ...defaultMonthly, ...monthlyRuleDb, incentive: { ...defaultMonthly.incentive, ...(monthlyRuleDb.incentive || {}) } } : defaultMonthly;
